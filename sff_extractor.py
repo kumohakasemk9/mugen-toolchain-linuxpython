@@ -31,8 +31,8 @@ Subfile header (Offset = non fixed)
 +0xa, uint16_t, Axis Y
 +0xc, uint16_t, Group#
 +0xe, uint16_t, Image#
-+0x10, uint16_t, If nonzero and Image length = 0, actual image is in specified subfile index
-+0x12, uint8_t, If 1, the image uses previous image palette
++0x10, uint16_t, If Image length = 0, actual image is in specified subfile index
++0x12, uint8_t, If 1, the image uses patette of image stored in top of sff
 
 Exact image offset = Subfile header address + Subfile header length
 Image format: pcx 256 indexed color (index=0 will treated as transparent)
@@ -109,6 +109,7 @@ def main():
 				if pl == 1:
 					f.seek(769, 2)
 					f.write(pal)
+			if i == 0:
 				pal = data[-769:] #record palette data for shared=1 img (use previous image pal)
 			f.close()
 		ptr = _ptr #update next subfile pointer
