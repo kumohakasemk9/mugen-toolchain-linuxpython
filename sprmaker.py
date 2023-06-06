@@ -8,9 +8,9 @@ Please consider supporting me through ko-fi.com
 https://ko-fi.com/kumohakase
 
 This is easy clone of sprmaker.exe.
-It is easy clone because it has only basic feature
-no compress, no palette omitting,
-always non shared palette mode.
+It is easy clone because it has some missing future
+There's no autocrop, there's no appending,
+and -p option might be buggy
 
 """
 
@@ -20,7 +20,8 @@ import sys, os, struct
 def asknumber(askstr, limmin, limmax):
 	while True:
 		t = None
-		print(askstr, end = "")
+		if not quiet:
+			print(askstr, end = "")
 		try:
 			t = int(input().strip())
 		except ValueError:
@@ -37,7 +38,8 @@ def main():
 	autocrop = False
 	linkfiles = False
 	removepal = False
-	quiet = False
+	debug = False
+	global quiet = False
 	for i in sys.argv:
 		#-c for autocrop mode, auto remove empty area of images
 		if i == "-c":
@@ -51,11 +53,15 @@ def main():
 		#-q for quiete mode, supress all outputs.
 		if i == "-q":
 			quiet = True
+		#-d for debug mode, shows link info and more
+		if i == "-s":
+			debug = True
 	global_pal_type = 1
 	#Ask output file name, if it is empty or existing, ask again.
 	outfile = ""
 	while outfile == "":
-		print("Enter name of new SFF file: ", end = "")
+		if not quiet:
+			print("Enter name of new SFF file: ", end = "")
 		outfile = input().strip()
 		# passing hash mark in this prompt will call palette mode menu
 		if outfile == "#":
@@ -81,7 +87,8 @@ Choose: """
 		#ask image file, ask again if it does not exist, exit loop if empty
 		infile = ""
 		while infile == "":
-			print("Enter name of graphic file: ", end = "")
+			if not quiet:
+				print("Enter name of graphic file: ", end = "")
 			infile = input().strip()
 			# passing hash mark in this prompt will call palette mode menu
 			if infile == "#":
@@ -108,7 +115,8 @@ Choose(was {pal_mode}): """
 		if linkfiles:
 			for i in range(len(image_info)):
 				if image_info[i][0] == infile:
-					print(f"Duplication found, linked to {i}")
+					if debug:
+						print(f"Duplication found, linked to {i}")
 					linkno = i
 					break
 		dup = True
@@ -150,6 +158,8 @@ Choose(was {pal_mode}): """
 			pm = 1
 			#if shared palette mode and palette removal mode, remove palette from file
 			if removepal and data[1] == 5 and data[-769] == 12:
+				if debug:
+					print(f"{i}: Deleting palette info from data")
 				data = data[:-769]
 		#prepare header
 		hdr = struct.pack("<LLhhHHHB", nextptr, len(data), e[3], e[4], e[1], e[2], linkid, pm)
@@ -157,15 +167,25 @@ Choose(was {pal_mode}): """
 		#write data to sff
 		sff.seek(ptr)
 		sff.write(hdr + data)
+		g = e[1]
+		im = e[2]
+		px = e[3]
+		py = e[4]
+		if not quiet:
+			print(f"{i}: Group{g} Image{im} {px}x{py} data written.")
 		ptr = nextptr #update sff file pointer for next file
 	#finally, write header and close sff
 	sff.seek(0)
 	sff.write(b"ElecbyteSpr\0\0\x01\0\x01")
 	img_ctr = len(image_info)
+	if not quiet:
+		print(f"{img_ctr} images written.")
 	sff.write(struct.pack("<LLLLB", 0, img_ctr, 0x200, 0x20, 1))
 	sff.write(b"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0")
 	sff.write(b"Made by kumotech sprmaker clone for spr v1 (C) 2023 kumohakase")
 	sff.close()
+	if not quiet:
+		print("SFF file written successfully. Good bye.")
 
 if __name__=="__main__":
 	main()
