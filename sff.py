@@ -196,6 +196,25 @@ def pcx_haspalette(pcxdata):
 	else:
 		return True
 
+#Remove palette from pcx data if it has palette data
+def pcx_tryremovepal(pcxdata):
+	if pcx_haspalette(pcxdata):
+		return pcxdata[:-769]
+	return pcxdata
+
+#returns true if group no, image no, x and y are in acceptable range.
+def sff_checkparam(grp, img, x, y):
+	if 0 <= grp <= 65535 and 0 <= img <= 65535 and -32768 <= x <= 32767 and -32767 <= y <= 32767:
+		return True
+	return False
+
+#Align a to 16 boundary
+def align16(a):
+	leftover = a % 16
+	if leftover != 0:
+		a += 16 - leftover
+	return a
+
 #write ctx in binary file fname
 def writebin(fname, ctx):
 	f = open(fname, "wb")
@@ -402,10 +421,13 @@ def extract_mode():
 def create_mode():
 	#if there is no sfffile option and infiledir show help and exit
 	if len(sys.argv) < 4:
-
+		print(HELPMSG_CREATE)
 		return 1
 	#check for parameters
 	m_autocrop = getoption("-c")
+	if m_autocrop != None:
+		print("Sorry: Autocrop is not implemented yet!")
+		return 1
 	m_linkmode = getoption("-f")
 	m_removepal = getoption("-p")
 	indir = os.path.expanduser(sys.argv[3]) #input directory
@@ -414,86 +436,165 @@ def create_mode():
 	if not os.path.exists(indir):
 		print(f"Fatal: input directory {indir} not found!")
 		return 1
-	#append mode not supported yet
-	if os.path.exists(sfffile):
-		print("Sorry: Append mode is not supported yet.")
-		return 1
 	#Gather files
 	filelist = []
-	for i in os.listdir(indir):
-		#process only for ".pcx" file
-		if not os.path.isfile(f"{indir}/{i}") or i[-4:] != ".pcx":
-			continue
-		#decode filename
-		t = i[:-4] #get basename
-		t = t.split("_") #id, grp, img, x, y
-		try:
-			t[0] = int(t[0])
-			t[1] = int(t[1])
-			t[2] = int(t[2])
-			t[3] = int(t[3])
-			t[4] = int(t[4])
-		except:
-			print(f"Fatal: {indir}/{i} does not have well formatted filename!")
+	if os.path.exists(f"{indir}/filelist"):
+		print("Filelist mode")
+		#if filelist exists
+		j = 0
+		t = [0]
+		for i in open(f"{indir}/filelist"):
+			if len(t) == 1:
+				t.append(i.strip()) #get filename from first line
+			elif len(t) == 2:
+				# group# image# x y shared?
+				e = i.strip().split() #get additional information from second line
+				try:
+					t.append(int(e[0]))
+					t.append(int(e[1]))
+					t.append(int(e[2]))
+					t.append(int(e[3]))
+				except:
+					print(f"Fatal: {e} is not well formatted information.");
+					return 1
+				if not sff_checkparam(t[2], t[3], t[4], t[5]):
+					print("Fatal: parameter not in range.")
+					return 1
+				if len(e) > 4 and e[4] == "shared":
+					t.append(True)
+				else:
+					t.append(False)
+				#Find duplicated filename and link if -f option is present
+				if m_linkmode != None:
+					for j in range(len(filelist)):
+						if t[1] == filelist[j][1]:
+							t.append(j)
+							break
+				if len(t) < 8:
+					t.append(None)
+				filelist.append(t)
+				t = [0]
+		if len(t) == 2:
+			print("Fatal: Incomplete file list")
 			return 1
-		if not(0 <= t[0] <= 65535) or not(0 <= t[1] <= 65535) or not(0 <= t[2] <= 65535) \
-		or not(-32768 <= t[3] <= 32767) or not(-32768 <= t[4] <= 32767):
-			print(f"Fatal: {indir}/{i}: parameter over flow!")
-			return 1
-		#if filename has string "shared", set shared palette mode flag
-		shared = False
-		if len(t) > 5 and t[5] == "shared":
-			shared = True
-		#id, filename, group, image, px, py, shared
-		filelist.append((t[0], i, t[1], t[2], t[3], t[4], shared))
-	filelist = sorted(filelist, key=lambda e: e[0]) #sort by id
-	#write to actual sff
-	sff = open(sfffile, "wb")
-	ptr = 0x200 #next subfile header offset pointer
-	#write image files
-	for i in filelist:
-		filename = i[1]
-		filename = f"{indir}/{filename}"
-		filelen = os.path.getsize(filename) #get filelength
-		#calculate next subfile offset
-		nextptr = ptr + 0x20 + filelen
-		#align at 16 octet boundary
-		leftover = nextptr % 16
-		if leftover != 0:
-			nextptr += 16 - leftover
-		#prepare header (nextptr, filelen, x, y, group#, image#, linkid, palette)
-		hdr = struct.pack("<LLhhHHHB", nextptr, filelen, i[4], i[5], i[2], i[3], 0, i[6])
-		hdr += b"\0\0\0\0\0\0\0\0\0\0\0\0\0"
-		#read image file
-		try:
-			f = open(filename, "rb")
-		except(IOError):
-			print(f"Fatal: {filename} read failed!")
+	else:
+		print("Filename guess mode")
+		#iff there's no filelist, guess information from filename
+		for i in os.listdir(indir):
+			#process only for ".pcx" file
+			if not os.path.isfile(f"{indir}/{i}") or i[-4:] != ".pcx":
+				continue
+			#decode filename
+			t = i[:-4] #get basename
+			t = t.split("_") #id, grp, img, x, y
+			try:
+				t[0] = int(t[0])
+				t[1] = int(t[1])
+				t[2] = int(t[2])
+				t[3] = int(t[3])
+				t[4] = int(t[4])
+			except:
+				print(f"Fatal: {indir}/{i} does not have well formatted filename!")
+				return 1
+			if not sff_checkparam(t[1], t[2], t[3], t[4]):
+				print(f"Fatal: {indir}/{i}: parameter over flow!")
+				return 1
+			#if filename has string "shared", set shared palette mode flag
+			shared = False
+			if len(t) > 5 and t[5] == "shared":
+				shared = True
+			#id, filename, group, image, px, py, shared
+			filelist.append((t[0], i, t[1], t[2], t[3], t[4], shared, None))
+		filelist = sorted(filelist, key=lambda e: e[0]) #sort by id
+	#Duplication check
+	for i in range(len(filelist)):
+		for j in range(len(filelist)):
+			grp1 = filelist[i][2]
+			grp2 = filelist[j][2]
+			img1 = filelist[i][3]
+			img2 = filelist[j][3]
+			if i != j and grp1 == grp2 and img1 == img2:
+				print("Fatal: Group# and Image# duplication!")
+				return 1
+	ptr = 0x200 # next subfile header offset pointer
+	indexoffset = 0
+	#if sff already exists, open in append mode
+	if os.path.exists(sfffile):
+		#in append mode, change image count on header with existing image count + appending image
+		#count and change last next_ptr to appropriate one
+		sff = open(sfffile, "r+b") #open file for read/write mode (non-turncate)
+		#get last image pointer and image size
+		l = sff_getinfo(sff)
+		if l == None:
 			return 3
-		data = f.read()
-		f.close()
+		if len(l) != 0:
+			lastfileptr = l[-1][0] #get final image pointer
+			# find optimal offset of next image (final image offset + len)
+			ptr = align16(lastfileptr + l[-1][1])
+			#rewrite next subheader pointer of final image
+			sff.seek(lastfileptr - 0x20) #seek to final subfile header
+			sff.write(struct.pack("<L", ptr)) #overwrite next_ptr
+		indexoffset = len(l) #index offset for getting appropriate link num
+		#rewrite header - rewrite image count 
+		sff.seek(0x14)
+		sff.write(struct.pack("<L", len(l) + len(filelist)))
+		#rewrite header
+		sff.seek(0x30)
+		sff.write(b"Made by kumotech sprmaker clone for spr v1 (C) 2023 kumohakase")
+	else:
+		#if sff doesn't exist, open file for writing and write header
+		sff = open(sfffile, "wb")
+		#write header
+		sff.write(b"ElecbyteSpr\0\0\x01\0\x01")
+		sff.write(struct.pack("<LLLLB", 0, len(filelist), 0x200, 0x20, 1))
+		sff.write(b"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0")
+		sff.write(b"Made by kumotech sprmaker clone for spr v1 (C) 2023 kumohakase")
+	#write image files
+	for i in range(len(filelist)):
+		e = filelist[i]
+		filename = e[1]
+		filename = f"{indir}/{filename}"
+		data = b""
+		linkid = e[7]
+		#read image file if not linked
+		if e[7] == None:
+			try:
+				f = open(filename, "rb")
+			except(IOError):
+				print(f"Fatal: {filename} read failed!")
+				return 3
+			data = f.read()
+			f.close()
+			#if shared palette mode and -p (Remove palette) option is present, remove palette
+			#first image of sff can't be palette-omitted data
+			if m_removepal != None and e[6] and i != 0:
+				data = pcx_tryremovepal(data) #if data has palette, remove
+			linkid = 0
+		filelen = len(data) #get filelength
+		#calculate next subfile offset
+		nextptr = align16(ptr + 0x20 + filelen) #align at 16 octet boundary
+		#prepare header (nextptr, filelen, x, y, group#, image#, linkid, palette)
+		hdr = struct.pack("<LLhhHHHB", nextptr, filelen, e[4], e[5], e[2], e[3], linkid + indexoffset, e[6])
+		hdr += b"\0\0\0\0\0\0\0\0\0\0\0\0\0"
 		#write data to sff
 		sff.seek(ptr)
 		sff.write(hdr + data)
-		g = i[2]
-		im = i[3]
-		px = i[4]
-		py = i[5]
-		print(f"{filename}: Group{g} Image{im} {px}x{py}", end = "")
-		if i[6]:
-			print(" Shared")
+		g = e[2]
+		im = e[3]
+		px = e[4]
+		py = e[5]
+		_i = i + indexoffset
+		print(f"{_i}: {filename}: Group{g} Image{im} {px}x{py}", end = "")
+		if e[6]:
+			print(" Shared", end = "")
+		if filelen == 0:
+			li = e[7] + indexoffset
+			print(f" Linked to {li}", end = "")
 		print()
 		ptr = nextptr #update sff file pointer for next file
-	#finally, write header and close sff
-	sff.seek(0)
-	sff.write(b"ElecbyteSpr\0\0\x01\0\x01")
-	img_ctr = len(filelist)
-	print(f"{img_ctr} images written.")
-	sff.write(struct.pack("<LLLLB", 0, img_ctr, 0x200, 0x20, 1))
-	sff.write(b"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0")
-	sff.write(b"Made by kumotech sprmaker clone for spr v1 (C) 2023 kumohakase")
 	sff.close()
-	print("SFF file written successfully. Good bye.")
+	img_ctr = len(filelist)
+	print(f"Written {img_ctr} images. Have a nice day.")
 	return 0
 		
 def main(args):
