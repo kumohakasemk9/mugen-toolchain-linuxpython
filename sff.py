@@ -7,7 +7,11 @@ Please consider supporting me through ko-fi.com
 https://ko-fi.com/kumohakase
 """
 
-HELPMSG = """python sff.py {c|d|t|x|r|o|?} sfffile [options]
+import sys, os, struct, tempfile
+
+PROGNAME = sys.argv[0]
+
+HELPMSG = f"""{PROGNAME} {{c|d|t|x|r|o|?}} [sfffile] [options]
 
 c: create/append mode
 d: delete mode
@@ -18,10 +22,7 @@ o: optomization mode
 ?: show this message
 
 return code 0 - OK
-return code 1 - command error
-return code 2 - open failed
-return code 3 - broken file
-return code 4 - sff or pcx insanity
+return code 1 or greater - Error
 
 To get help for each modes, please execute without sfffile and [options]."""
 
@@ -33,11 +34,27 @@ specified index in order of file registration order.
 index, group, number can be range like 10:20 (form 10 to 20)
 """
 
-HELPMSG_CREATE = """Create mode, create new sfffile/append images in infiledir to new sfffile
-python sff.py c sfffile infiledir [options]
+HELPMSG_LIST = f"""List mode, Lists contained images of sfffile
+{PROGNAME} t sfffile [options]
 
 Options:
--c: auto remove empty area of images.
+{HELPMSG_SELOPT}
+If there was no option, it means list all."""
+
+HELPMSG_EXTRACT = f"""Extract mode, extract sfffile and store into outdir
+{PROGNAME} x sfffile outdir [options]
+
+Options:
+-f: add basic infomation to filename (like id_group#_image#_x_y.pcx)
+-p: export palette of image stored on top of sff (shared palette)
+{HELPMSG_SELOPT}
+If there was no option, it means extract all."""
+
+HELPMSG_CREATE = """Create mode, create new sfffile/append images in infiledir to new sfffile
+{PROGNAME} c sfffile infiledir [options]
+
+Options:
+-c: auto remove empty area of images. (Not yet implemented)
 -f: link duplicate images (files that shares same filename).
 -p: remove palette data from image when shared palette mode.
 
@@ -67,10 +84,29 @@ stand0_kumo.pcx
 This will output sff includes:
 portrait0_kumo.pcx Id=0 Group=9000, Image=0, x=0, y=0, nonshared palette
 portrait1_kumo.pcx Id=1 Group=9000, Image=1, x=0, y=0, nonshared palette
-stand0_kumo.pcx Id=2 Group=0, Image=0, x=50, y=60, shared palette
-"""
+stand0_kumo.pcx Id=2 Group=0, Image=0, x=50, y=60, shared palette"""
 
-import sys, os, struct, time, tempfile
+HELPMSG_DELETE = f"""Delete mode: delete image files in sff
+{PROGNAME} d sfffile options
+
+Options:
+-y: Do not confirm when deleting. Use with caution.
+{HELPMSG_SELOPT}
+You need to specify at least -i, -g or -n."""
+
+HELPMSG_REORDER = """Reorder mode, change sff image file order of specified image.
+{PROGNAME} r sfffile options index1 index2
+
+Not yet implemented.
+Changes location of image in index1 to index2"""
+
+HELPMSG_OPTIMIZE = f"""Optimize mode, tries to reconstruct sff with specified shrinking options
+{PROGNAME} o sfffile [options]
+
+Not yet implemented.
+-c: auto remove empty area of images.
+-f: compare images and detect same file, then link them.
+-p: delete palette information from shared palette images"""
 
 #find command line option s then return next param, returns None if s not found, returns "" 
 #if no next param
@@ -259,7 +295,7 @@ def sff_getinfo(sff):
 	#Check for header
 	if hdr[0:0x10] != b"ElecbyteSpr\0\0\x01\0\x01":
 		print("Fatal: Wrong file identifier.")
-		None
+		return None
 	hp =  struct.unpack("<LL", hdr[0x14:0x1c]) #image_count, subheader_offset
 	#+0x1c uint32_t (subheader len) seems to be ignored in mugen and assumed 0x20
 	ptr = hp[1] #pointer for subfiles in sff
@@ -283,13 +319,40 @@ def sff_getinfo(sff):
 		ptr = p[0] #update pointer for reading next subfile
 	return img_info
 
+#reconstruct sff by originalsff file object and new image information list fixedinfo
+def sff_reconstruct(sffname, originalsff, fixedinfo):
+	tmpsff = tempfile.TemporaryFile()
+	ptr = 0x200
+	c = 0
+	#write subheader and files
+	for i in fixedinfo:
+		#skip if deleted
+		if i == None:
+			continue
+		filelen = i[1]
+		data = b""
+		#if not linked, read original content
+		if filelen != 0:
+			originalsff.seek(i[0]) #seek to image file offset
+			data = originalsff.read(filelen) #read pcx
+		nextptr = sff_getoptimaloffset(ptr, filelen) #get optimal next subheader offset
+		#prepare subheader
+		hdr = sff_generatesubheader(nextptr, filelen, i[2], i[3], i[4], i[5], i[6], i[7])
+		#write subheader + file
+		tmpsff.seek(ptr)
+		tmpsff.write(hdr + data)
+		ptr = nextptr
+		c = c + 1
+	sff_writeheader(tmpsff, c) #write header
+	originalsff.close() #close original sff
+	#overwrite original sff with tmpsff
+	tmpsff.seek(0)
+	writebin(sffname, tmpsff.read())
+	tmpsff.close() #close new sff
+
 def list_mode():
 	if len(sys.argv) < 3:
-		print("List mode, Lists contained images of sfffile")
-		print("python sff.py t sfffile [options]\n")
-		print("Options:")
-		print(HELPMSG_SELOPT)
-		print("If there was no option, it means list all.")
+		print(HELPMSG_LIST)
 		return 1
 	selector = getselectionfilter() #get selement elector options
 	#error check
@@ -374,13 +437,7 @@ def list_mode():
 
 def extract_mode():
 	if len(sys.argv) < 4:
-		print("Extract mode, extract sfffile and store into outdir")
-		print("python sff.py x sfffile outdir [options]\n")
-		print("Options:")
-		print(HELPMSG_SELOPT)
-		print("-f: add basic infomation to filename (like id_group#_image#_x_y.pcx)")
-		print("-p: export palette of image stored on top of sff (shared palette)")
-		print("If there was no option, it means extract all.")
+		print(HELPMSG_EXTRACT)
 		return 1
 	selector = getselectionfilter() #get selector option
 	detailed_filename = getoption("-f")
@@ -629,12 +686,7 @@ def create_mode():
 
 def delete_mode():
 	if len(sys.argv) < 3:
-		print("Delete mode: delete image files in sff")
-		print("python sff.py d <sfffile> <options>\n")
-		print("Options:")
-		print(HELPMSG_SELOPT)
-		print("You need to specify at least -i, -g or -n.")
-		print("-y: Do not confirm when deleting. Use with caution.")
+		print(HELPMSG_DELETE)
 		return 1
 	selector = getselectionfilter() #get selector options
 	m_noconfirm = getoption("-y")
@@ -682,42 +734,20 @@ def delete_mode():
 		print("SFF file is untouched.")
 		sff.close()
 		return 0
-	#reconstruct sff file by fixed information
-	tmpsff = tempfile.TemporaryFile()
-	sff_writeheader(tmpsff, len(l) - removedcount) #write header
-	ptr = 0x200
-	#write subheader and files
-	for i in l:
-		#skip if deleted
-		if i == None:
-			continue
-		filelen = i[1]
-		data = b""
-		#if not linked, read original content
-		if filelen != 0:
-			sff.seek(i[0]) #seek to image file offset of original sff
-			data = sff.read(filelen)
-		nextptr = sff_getoptimaloffset(ptr, filelen) #get optimal next subheader offset
-		#prepare subheader
-		hdr = sff_generatesubheader(nextptr, filelen, i[2], i[3], i[4], i[5], i[6], i[7])
-		#write subheader + file
-		tmpsff.seek(ptr)
-		tmpsff.write(hdr + data)
-		ptr = nextptr
-	sff.close() #close original sff
-	#overwrite original sff with tmpsff
-	tmpsff.seek(0)
-	writebin(infile, tmpsff.read())
-	tmpsff.close() #close new sff
+	sff_reconstruct(infile, sff, l) #reconstruct sff file by fixed information
 	print(f"Removed {removedcount} images.")
 	return 0
 
 def reorder_mode():
-	print("Sorry: Unimplemented")
+	if len(sys.argv) < 3:
+		print(HELPMSG_REORDER)
+		return 1
 	return 1
 
 def optimization_mode():
-	print("Sorry: Unimplemented")
+	if len(sys.argv) < 3:
+		print(HELPMSG_OPTIMIZE)
+		return 1
 	return 1
 		
 def main(args):
