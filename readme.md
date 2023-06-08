@@ -23,7 +23,7 @@ I recommend creating new one.
 Image filelist format is like    
 ```
 imagefilename
-group# image# x y \[shared\]
+group# image# x y[ shared]
 ```
 repeat those lines for all images   
 meanings are   
@@ -32,3 +32,7 @@ meanings are
 - image#: image number
 - x: x axis
 - y: y axis
+- \[ shared\]: treat image sa shared palette, treated individual palette if omitted
+3. Please run `python sff.py c youroc.sff indir -f -p`. or ./sff.py
+youroc.sff is output file name, you can pick one that you want   
+indir is input directory, for example characterimgs if you store all files into characterimgs  
