@@ -16,5 +16,7 @@ that has command line switch syntax like linux tar util
     
 simple sff making step using this:   
 
+Please place those files under same directory   
+I recommend creating new one   
 1. Prepare your characters images and save it as 256 indexed color pcx images   
 2. Make image filelist that contains filename and mandatory information for mugen
