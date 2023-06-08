@@ -25,7 +25,8 @@ Image filelist format is like
 imagefilename
 group# image# x y[ shared]
 ```
-repeat those lines for all images   
+repeat those lines for all images and please save it as `filelist`  
+in same directory that has images   
 meanings are   
 - imagefilename: image file name
 - group#: group number
@@ -34,5 +35,5 @@ meanings are
 - y: y axis
 - \[ shared\]: treat image sa shared palette, treated individual palette if omitted
 3. Please run `python sff.py c youroc.sff indir -f -p`. or ./sff.py    
-youroc.sff is output file name, you can pick one that you want   
-indir is input directory, for example characterimgs if you store all files into characterimgs  
+`youroc.sff` is output file name, you can pick one that you want   
+`indir` is input directory, for example `characterimgs` if you store all files into `characterimgs`  
