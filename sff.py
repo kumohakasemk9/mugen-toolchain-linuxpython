@@ -7,13 +7,13 @@ Please consider supporting me through ko-fi.com
 https://ko-fi.com/kumohakase
 """
 
-HELPMSG = """python sff.py {c|d|t|x|s|o|?} sfffile [options]
+HELPMSG = """python sff.py {c|d|t|x|r|o|?} sfffile [options]
 
 c: create/append mode
 d: delete mode
 t: list mode
 x: extract mode
-s: swap mode
+r: reorder mode
 o: optomization mode
 ?: show this message
 
@@ -70,7 +70,7 @@ portrait1_kumo.pcx Id=1 Group=9000, Image=1, x=0, y=0, nonshared palette
 stand0_kumo.pcx Id=2 Group=0, Image=0, x=50, y=60, shared palette
 """
 
-import sys, os, struct
+import sys, os, struct, time, tempfile
 
 #find command line option s then return next param, returns None if s not found, returns "" 
 #if no next param
@@ -208,12 +208,38 @@ def sff_checkparam(grp, img, x, y):
 		return True
 	return False
 
-#Align a to 16 boundary
-def align16(a):
-	leftover = a % 16
+#get optimal offset of next subheader when current subheader offset
+#is ptr and image size is filelen
+def sff_getoptimaloffset(ptr, filelen):
+	r = ptr + 0x20 + filelen #current subheader pointer + subheader size + image length
+	#Align for 16 octets boundary
+	leftover = r % 16
 	if leftover != 0:
-		a += 16 - leftover
-	return a
+		return r + (16 - leftover)
+	return r
+
+#write sff header, imglen: image count
+def sff_writeheader(sff, imglen):
+	sff.seek(0)
+	sff.write(b"ElecbyteSpr\0\0\x01\0\x01")
+	sff.write(struct.pack("<LLLLB", 0, imglen, 0x200, 0x20, 1))
+	sff.write(b"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0")
+	sff.write(b"Made by kumotech sprmaker clone for spr v1 (C) 2023 kumohakase")
+
+#generates subheader for sff
+def sff_generatesubheader(nextptr, filelen, x, y, grp, img, linkid, pal):
+	p = 0
+	if pal == True:
+		p = 1
+	li = linkid
+	if linkid == None:
+		li = 0
+	#sub header size 0x20 (fixed?)
+	#uint32_t uint32_t int16_t int16_t uint16_t uint16_t uint16_t uint8_t 000000...
+	#nextptr length x y group# image# linkid isshared
+	hdr = struct.pack("<LLhhHHHB", nextptr, filelen, x, y, grp, img, li, pal)
+	hdr += b"\0\0\0\0\0\0\0\0\0\0\0\0\0"
+	return hdr
 
 #write ctx in binary file fname
 def writebin(fname, ctx):
@@ -222,6 +248,7 @@ def writebin(fname, ctx):
 	f.close()
 
 #Read sff and get information, return None if fail
+#list element content = [image offset, size, x, y, group#, image#, link index, palette mode]
 def sff_getinfo(sff):
 	sff.seek(0)
 	hdr = sff.read(0x1c) #read header
@@ -413,6 +440,7 @@ def extract_mode():
 			if e[7] == 1:
 				filename += "_shared"
 		if itemselected:
+			print(f"Extracted: {i}: Group{grp} Image{imgno} -> {outdir}/{filename}.pcx")
 			writebin(f"{outdir}/{filename}.pcx", data)
 	sff.close()
 	print("SFF extract finished. Have a nice day.")
@@ -506,18 +534,17 @@ def create_mode():
 			#id, filename, group, image, px, py, shared
 			filelist.append((t[0], i, t[1], t[2], t[3], t[4], shared, None))
 		filelist = sorted(filelist, key=lambda e: e[0]) #sort by id
-	#Duplication check
-	for i in range(len(filelist)):
-		for j in range(len(filelist)):
-			grp1 = filelist[i][2]
-			grp2 = filelist[j][2]
-			img1 = filelist[i][3]
-			img2 = filelist[j][3]
-			if i != j and grp1 == grp2 and img1 == img2:
-				print("Fatal: Group# and Image# duplication!")
-				return 1
 	ptr = 0x200 # next subfile header offset pointer
 	indexoffset = 0
+	#Duplication check, multiple existance of images that shares same grp# and img# is forbidden.
+	for i in range(len(filelist)):
+		grp = filelist[i][2]
+		img = filelist[i][3]
+		for j in range(len(filelist)):
+			#exit if not comparing same object + grp id are same + img id are same
+			if i != j and grp == filelist[j][2] and img == filelist[j][3]:
+				print(f"Fatal: FileList: Already exists: Group{grp} Image{img}")
+				return 1
 	#if sff already exists, open in append mode
 	if os.path.exists(sfffile):
 		#in append mode, change image count on header with existing image count + appending image
@@ -529,11 +556,20 @@ def create_mode():
 			return 3
 		if len(l) != 0:
 			lastfileptr = l[-1][0] #get final image pointer
-			# find optimal offset of next image (final image offset + len)
-			ptr = align16(lastfileptr + l[-1][1])
+			# find optimal offset of next image
+			ptr = sff_getoptimaloffset(lastfileptr, l[-1][1])
 			#rewrite next subheader pointer of final image
 			sff.seek(lastfileptr - 0x20) #seek to final subfile header
 			sff.write(struct.pack("<L", ptr)) #overwrite next_ptr
+			#Duplication check with existing images
+			for i in range(len(filelist)):
+				grp = filelist[i][2]
+				img = filelist[i][3]
+				for k in l:
+					if grp == k[4] and img == k[5]:
+						print(f"Fatal: AppendSFF: Already exists: Group{grp} Image{img}")
+						sff.close()
+						return 1
 		indexoffset = len(l) #index offset for getting appropriate link num
 		#rewrite header - rewrite image count 
 		sff.seek(0x14)
@@ -544,15 +580,15 @@ def create_mode():
 	else:
 		#if sff doesn't exist, open file for writing and write header
 		sff = open(sfffile, "wb")
-		#write header
-		sff.write(b"ElecbyteSpr\0\0\x01\0\x01")
-		sff.write(struct.pack("<LLLLB", 0, len(filelist), 0x200, 0x20, 1))
-		sff.write(b"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0")
-		sff.write(b"Made by kumotech sprmaker clone for spr v1 (C) 2023 kumohakase")
+		sff_writeheader(sff, len(filelist))
 	#write image files
 	for i in range(len(filelist)):
 		e = filelist[i]
 		filename = e[1]
+		g = e[2]
+		im = e[3]
+		px = e[4]
+		py = e[5]
 		filename = f"{indir}/{filename}"
 		data = b""
 		linkid = e[7]
@@ -562,6 +598,7 @@ def create_mode():
 				f = open(filename, "rb")
 			except(IOError):
 				print(f"Fatal: {filename} read failed!")
+				sff.close()
 				return 3
 			data = f.read()
 			f.close()
@@ -569,20 +606,13 @@ def create_mode():
 			#first image of sff can't be palette-omitted data
 			if m_removepal != None and e[6] and i != 0:
 				data = pcx_tryremovepal(data) #if data has palette, remove
-			linkid = 0
 		filelen = len(data) #get filelength
-		#calculate next subfile offset
-		nextptr = align16(ptr + 0x20 + filelen) #align at 16 octet boundary
+		nextptr = sff_getoptimaloffset(ptr, filelen) #calculate next subfile offset
 		#prepare header (nextptr, filelen, x, y, group#, image#, linkid, palette)
-		hdr = struct.pack("<LLhhHHHB", nextptr, filelen, e[4], e[5], e[2], e[3], linkid + indexoffset, e[6])
-		hdr += b"\0\0\0\0\0\0\0\0\0\0\0\0\0"
+		hdr = sff_generatesubheader(nextptr, filelen, px, py, g, im, linkid, e[6])
 		#write data to sff
 		sff.seek(ptr)
 		sff.write(hdr + data)
-		g = e[2]
-		im = e[3]
-		px = e[4]
-		py = e[5]
 		_i = i + indexoffset
 		print(f"{_i}: {filename}: Group{g} Image{im} {px}x{py}", end = "")
 		if e[6]:
@@ -596,6 +626,99 @@ def create_mode():
 	img_ctr = len(filelist)
 	print(f"Written {img_ctr} images. Have a nice day.")
 	return 0
+
+def delete_mode():
+	if len(sys.argv) < 3:
+		print("Delete mode: delete image files in sff")
+		print("python sff.py d <sfffile> <options>\n")
+		print("Options:")
+		print(HELPMSG_SELOPT)
+		print("You need to specify at least -i, -g or -n.")
+		print("-y: Do not confirm when deleting. Use with caution.")
+		return 1
+	selector = getselectionfilter() #get selector options
+	m_noconfirm = getoption("-y")
+	#stop dangerous operation
+	if selector[0] == None and selector[1] == None and selector[2] == None:
+		print("Stopped: Please specify selector (-i or -g or -n).")
+		return 1
+	infile = sys.argv[2]
+	removedcount = 0
+	try:
+		sff = open(infile, "rb")
+	except(IOError):
+		print("Open failed")
+		return 2
+	#[image offset, size, x, y, group#, image#, link index, palette mode]
+	l = sff_getinfo(sff) #get all image information in sff
+	#fix image infomation according to selected deletion list
+	for i in range(len(l)):
+		e = l[i]
+		grp = e[4]
+		img = e[5]
+		#continue if not selected
+		if not decodeselectionfilter(selector, i, grp, img):
+			continue
+		#Show deleteing file information
+		print(f"Deleting: {i}: Group{grp} Image{img}")
+		#if no confirm option not present, ask
+		if m_noconfirm == None:
+			print("Are you sure? [y/n]", end = "")
+			t = input().strip()
+			if t != "y":
+				print(f"Undeleting: {i}: Group{grp} Image{img}")
+				continue
+		#fix link index number
+		for j in range(len(l)):
+			if l[j] == None:
+				continue
+			linkno = l[j][6]
+			#if linked index is bigger (and equal) than deleted image index, it will be decremented
+			if linkno != None and linkno >= i:
+				l[j][6] = linkno - 1
+		l[i] = None #finally, set file information to None to notify the file is deleted
+		removedcount = removedcount + 1
+	if removedcount == 0:
+		print("SFF file is untouched.")
+		sff.close()
+		return 0
+	#reconstruct sff file by fixed information
+	tmpsff = tempfile.TemporaryFile()
+	sff_writeheader(tmpsff, len(l) - removedcount) #write header
+	ptr = 0x200
+	#write subheader and files
+	for i in l:
+		#skip if deleted
+		if i == None:
+			continue
+		filelen = i[1]
+		data = b""
+		#if not linked, read original content
+		if filelen != 0:
+			sff.seek(i[0]) #seek to image file offset of original sff
+			data = sff.read(filelen)
+		nextptr = sff_getoptimaloffset(ptr, filelen) #get optimal next subheader offset
+		#prepare subheader
+		hdr = sff_generatesubheader(nextptr, filelen, i[2], i[3], i[4], i[5], i[6], i[7])
+		#write subheader + file
+		tmpsff.seek(ptr)
+		tmpsff.write(hdr + data)
+		ptr = nextptr
+	sff.close() #close original sff
+	#overwrite original sff with tmpsff
+	tmpsff.seek(0)
+	writebin(infile, tmpsff.read())
+	tmpsff.close() #close new sff
+	print(f"Removed {removedcount} images.")
+	return 0
+
+def reorder_mode():
+	print("Sorry: Unimplemented")
+	return 1
+
+def optimization_mode():
+	print("Sorry: Unimplemented")
+	return 1
 		
 def main(args):
 	print(CREDIT)
@@ -613,8 +736,8 @@ def main(args):
 		return list_mode()
 	elif m == "x":
 		return extract_mode()
-	elif m == "s":
-		return swap_mode()
+	elif m == "r":
+		return reorder_mode()
 	elif m == "o":
 		return optimization_mode()
 	else:
