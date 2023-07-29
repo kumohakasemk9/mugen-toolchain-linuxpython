@@ -701,6 +701,7 @@ def delete_mode():
 	except(IOError):
 		print("Open failed")
 		return 2
+	#savedpal = None
 	#[image offset, size, x, y, group#, image#, link index, palette mode]
 	l = sff_getinfo(sff) #get all image information in sff
 	#fix image infomation according to selected deletion list
@@ -708,9 +709,13 @@ def delete_mode():
 		e = l[i]
 		grp = e[4]
 		img = e[5]
-		#continue if not selected
+		#abort operation if not selected
 		if not decodeselectionfilter(selector, i, grp, img):
 			continue
+		#avoid deleting index0
+		if i == 0:
+			print("Index0 image can not be removed!")
+			return 1
 		#Show deleteing file information
 		print(f"Deleting: {i}: Group{grp} Image{img}")
 		#if no confirm option not present, ask
@@ -727,14 +732,26 @@ def delete_mode():
 			linkno = l[j][6]
 			#if linked index is bigger (and equal) than deleted image index, it will be decremented
 			if linkno != None and linkno >= i:
-				l[j][6] = linkno - 1
-		l[i] = None #finally, set file information to None to notify the file is deleted
+				l[j][6] = linkno - 1#Store index=0 palette if deleting index 0 image.
+		#if program is going to delete index=0 image, program have to save palette
+		#data or sff will be broken
+		#if i == 0:
+		#	ioff = e[0] #image offset
+		#	isiz = e[1] #image size
+			#read image
+		#	sff.seek(ioff)
+		#	iimg = sff.read(isiz)
+		#	if not pcx_haspalette(iimg):
+		#		print("Insanity: SFF image 0 does not have palette. Aborting operation.")
+		#		return 1
+		#	savedpal = iimg[:-769] #save palette
+		l[i] = None #finally, set file information to None to notify the file is delete
 		removedcount = removedcount + 1
 	if removedcount == 0:
 		print("SFF file is untouched.")
 		sff.close()
 		return 0
-	sff_reconstruct(infile, sff, l) #reconstruct sff file by fixed information
+	sff_reconstruct(infile, sff, l, savedpal) #reconstruct sff file by fixed information
 	print(f"Removed {removedcount} images.")
 	return 0
 
